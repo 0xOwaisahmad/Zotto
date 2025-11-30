@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+
+abstract contract TokenInterface {
+    function transfer(address recipient, uint amount) external virtual returns (bool);
+    // function decimals() external virtual view returns(uint8);
+    function transferFrom(address from, address to, uint amount) external virtual returns (bool);
+    function balanceOf(address account) external view virtual returns (uint256);
+    function allowance(address account, address spender) external view virtual returns (uint256);
+    // function bulkTransfer(address[] calldata recipients, uint[] calldata amount) external virtual returns(bool);
+}
+
+contract stacking {
+
+    // --- Staking data ---
+    address[] addr;
+    uint[] initialAmount;
+    uint[] currentAmount;
+    uint[] withdrawedAmount;
+    mapping(address => uint) id;
+    uint stakedAmount;
+
+    // --- Token and vault ---
+    address vaultAddress;
+    TokenInterface TokenContract;
+
+    constructor() {
+        TokenContract = TokenInterface(0x50f3Bd914D5Ff48453252ded840ed481036c4B27);
+        // decimal = TokenContract.decimals();
+        vaultAddress = address(this);
+
+        // Initialize with one address
+        addr.push(0xE0bF232273Bc010662288DC8dE3f1119C79D4136);
+        id[0xE0bF232273Bc010662288DC8dE3f1119C79D4136] = addr.length - 1;
+
+        initialAmount.push(1);
+        currentAmount.push(1);
+        withdrawedAmount.push(0);
+        stakedAmount = 1;
+    }
+
+    // --- Getters ---
+    function getInitial(address _address) external view returns (uint) {
+        if (id[_address] == 0 && addr[0] != _address) return 0;
+        return initialAmount[id[_address]];
+    }
+
+    function getCurrent(address _address) external view returns (uint) {
+        if (id[_address] == 0 && addr[0] != _address) return 0;
+        return currentAmount[id[_address]];
+    }
+
+    function getWithdrawed(address _address) external view returns (uint) {
+        if (id[_address] == 0 && addr[0] != _address) return 0;
+        return withdrawedAmount[id[_address]];
+    }
+
+    function getTotalStacked() external view returns (uint) {
+        return stakedAmount;
+    }
+
+    // --- Internal distribution logic ---
+    function distribute(uint amount) internal {
+        if (stakedAmount != 0) {
+            uint currentBalance = TokenContract.balanceOf(vaultAddress);
+            uint ratio = (currentBalance - amount) * 1000 / stakedAmount;
+            stakedAmount = currentBalance;
+
+            // Update all current amounts proportionally
+            for (uint i = addr.length - 1; i >= 0; --i) {
+                currentAmount[i] = currentAmount[i] * ratio / 1000;
+            }
+        }
+    }
+
+    // --- Stake tokens ---
+    function stake(uint amount) external returns (bool) {
+        require(amount > 0, "Increase Amount");
+        require(amount <= TokenContract.balanceOf(msg.sender), "BALANCE IS INSUFFICIENT");
+        require(amount <= TokenContract.allowance(msg.sender, vaultAddress), "INCREASE ALLOWANCE OF THIS CONTRACT");
+        require(TokenContract.transferFrom(msg.sender, vaultAddress, amount), "SOMETHING WENT WRONG");
+
+        distribute(amount);
+
+        if (id[msg.sender] == 0 && addr[0] != msg.sender) {
+            newEntry();
+        }
+
+        initialAmount[id[msg.sender]] += amount;
+        currentAmount[id[msg.sender]] += amount;
+
+        return true;
+    }
+
+    // --- Create new staking entry ---
+    function newEntry() internal {
+        addr.push(msg.sender);
+        id[msg.sender] = addr.length - 1;
+
+        initialAmount.push(0);
+        currentAmount.push(0);
+        withdrawedAmount.push(0);
+    }
+
+    // --- Destake / Withdraw tokens ---
+    function destake(uint amount) external returns (bool) {
+        distribute(0);
+
+        require(amount <= currentAmount[id[msg.sender]], "Not enough token to destake");
+
+        if (amount == currentAmount[id[msg.sender]]) {
+            // Remove user entirely from arrays
+            uint index = id[msg.sender];
+            uint length = addr.length;
+
+            id[msg.sender] = 0;
+
+            for (uint i = index; i < length - 1; ++i) {
+                addr[i] = addr[i + 1];
+                initialAmount[i] = initialAmount[i + 1];
+                currentAmount[i] = currentAmount[i + 1];
+                withdrawedAmount[i] = withdrawedAmount[i + 1];
+                id[addr[i + 1]] = i;
+            }
+
+            addr.pop();
+            initialAmount.pop();
+            currentAmount.pop();
+            withdrawedAmount.pop();
+        } else {
+            initialAmount[id[msg.sender]] -= amount;
+            currentAmount[id[msg.sender]] -= amount;
+            withdrawedAmount[id[msg.sender]] += amount;
+        }
+
+        stakedAmount -= amount;
+
+        require(TokenContract.transfer(msg.sender, amount), "SOMETHING WENT WRONG");
+        return true;
+    }
+}
